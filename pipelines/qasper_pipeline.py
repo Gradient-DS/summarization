@@ -13,8 +13,10 @@ import os
 import sys
 from typing import TypedDict
 
-# Make the raptor package importable from the project root
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "raptor"))
+# Project root → lib/ contains the raptor package; pipelines/ contains prompts
+_root = os.path.join(os.path.dirname(__file__), "..")
+sys.path.insert(0, os.path.join(_root, "lib"))   # for `from raptor import ...`
+sys.path.insert(0, os.path.dirname(__file__))    # for `from prompts import ...`
 
 from openai import OpenAI
 from prompts import DOCUMENT_SUMMARY_SYSTEM, DOCUMENT_SUMMARY_USER
@@ -175,6 +177,110 @@ def evaluate_summary(prediction: str, reference: str) -> EvalScores:
         bertscore_precision=P[0].item(),
         bertscore_recall=R[0].item(),
         bertscore_f1=F[0].item(),
+    )
+
+
+
+def compare(
+    text: str,
+    reference: str,
+    title: str = "",
+    config: RetrievalAugmentationConfig = None,
+    max_words: int = 2500,
+) -> dict:
+    """
+    Run both RAPTOR and the baseline on the same text, evaluate against
+    reference, and print a side-by-side comparison.
+
+    Dataset-agnostic: accepts raw text + reference string directly so it
+    works for both QASPER and BookSum (or any other dataset).
+
+    Args:
+        text:      Full document/chapter text to summarise.
+        reference: Reference summary to score against.
+        title:     Optional document title for display.
+        config:    Optional pre-built RetrievalAugmentationConfig.
+        max_words: Word cap for the baseline truncation.
+
+    Returns:
+        dict with keys "raptor" and "baseline", each an EvalScores dict.
+    """
+    if title:
+        print(f"Document: {title}")
+
+    # --- Baseline ---
+    print("Running baseline...")
+    truncated = " ".join(text.split()[:max_words])
+    client = OpenAI()
+    response = client.chat.completions.create(
+        model="gpt-4.1-nano",
+        messages=[
+            {"role": "system", "content": DOCUMENT_SUMMARY_SYSTEM},
+            {"role": "user", "content": DOCUMENT_SUMMARY_USER.format(context=truncated)},
+        ],
+        max_tokens=500,
+    )
+    baseline_summary = response.choices[0].message.content.strip()
+    baseline_scores = evaluate_summary(baseline_summary, reference)
+
+    # --- RAPTOR ---
+    print("Running RAPTOR...")
+    if config is None:
+        config = build_raptor_config()
+    ra = RetrievalAugmentation(config=config)
+    ra.add_documents(text)
+    context, _ = ra.retrieve(
+        question="Summarize this document",
+        top_k=10,
+        max_tokens=3500,
+        collapse_tree=True,
+        return_layer_information=True,
+    )
+    response = client.chat.completions.create(
+        model="gpt-4.1-nano",
+        messages=[
+            {"role": "system", "content": DOCUMENT_SUMMARY_SYSTEM},
+            {"role": "user", "content": DOCUMENT_SUMMARY_USER.format(context=context)},
+        ],
+        max_tokens=500,
+    )
+    raptor_summary = response.choices[0].message.content.strip()
+    raptor_scores = evaluate_summary(raptor_summary, reference)
+
+    # --- Print ---
+    sep = "=" * 80
+    thin = "-" * 80
+    print(f"\n{sep}")
+    print("BASELINE SUMMARY (plain LLM, no RAPTOR):")
+    print(thin)
+    print(baseline_summary)
+    print(f"\n{sep}")
+    print("RAPTOR SUMMARY (tree retrieval):")
+    print(thin)
+    print(raptor_summary)
+    print(f"\n{sep}")
+    print("REFERENCE:")
+    print(thin)
+    print(reference)
+    print(f"\n{sep}")
+    print(f"{'METRIC':<25} {'BASELINE':>10} {'RAPTOR':>10} {'DELTA':>10}")
+    print(thin)
+    for k in raptor_scores:
+        delta = raptor_scores[k] - baseline_scores[k]
+        sign = "+" if delta >= 0 else ""
+        print(f"  {k:<23} {baseline_scores[k]:>10.4f} {raptor_scores[k]:>10.4f} {sign}{delta:>9.4f}")
+    print(sep)
+
+    return {"raptor": raptor_scores, "baseline": baseline_scores}
+
+
+def compare_document(document: dict, config: RetrievalAugmentationConfig = None) -> dict:
+    """Convenience wrapper for QASPER documents."""
+    return compare(
+        text=extract_qasper_text(document),
+        reference=document.get("abstract", ""),
+        title=document.get("title", ""),
+        config=config,
     )
 
 

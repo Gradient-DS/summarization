@@ -6,8 +6,8 @@ from abc import ABC, abstractmethod
 from openai import OpenAI
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 
-# Load prompts from project root if available, otherwise fall back to inline strings
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
+# Load prompts from pipelines/ if available, otherwise fall back to inline strings
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'pipelines'))
 try:
     from prompts import SUMMARIZATION_SYSTEM, SUMMARIZATION_USER
 except ImportError:
@@ -61,20 +61,16 @@ class GPT4NanoSummarizationModel(BaseSummarizationModel):
 
     @retry(wait=wait_random_exponential(min=1, max=20), stop=stop_after_attempt(6))
     def summarize(self, context, max_tokens=500, stop_sequence=None):
-        try:
-            client = OpenAI()
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": SUMMARIZATION_SYSTEM},
-                    {"role": "user", "content": SUMMARIZATION_USER.format(context=context)},
-                ],
-                max_tokens=max_tokens,
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            print(e)
-            return e
+        client = OpenAI()
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": SUMMARIZATION_SYSTEM},
+                {"role": "user", "content": SUMMARIZATION_USER.format(context=context)},
+            ],
+            max_tokens=max_tokens,
+        )
+        return response.choices[0].message.content
 
 
 class GPT3SummarizationModel(BaseSummarizationModel):
