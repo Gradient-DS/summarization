@@ -12,7 +12,7 @@ from tenacity import retry, stop_after_attempt, wait_random_exponential
 
 from .EmbeddingModels import BaseEmbeddingModel, OpenAIEmbeddingModel
 from .SummarizationModels import (BaseSummarizationModel,
-                                  GPT3TurboSummarizationModel)
+                                  GPT4NanoSummarizationModel)
 from .tree_structures import Node, Tree
 from .utils import (distances_from_embeddings, get_children, get_embeddings,
                     get_node_list, get_text,
@@ -31,6 +31,9 @@ class TreeBuilderConfig:
         top_k=None,
         selection_mode=None,
         summarization_length=None,
+        summarization_length_ratio=None,
+        summarization_length_min=100,
+        summarization_length_max=600,
         summarization_model=None,
         embedding_models=None,
         cluster_embedding_model=None,
@@ -73,8 +76,15 @@ class TreeBuilderConfig:
             summarization_length = 100
         self.summarization_length = summarization_length
 
+        if summarization_length_ratio is not None:
+            if not isinstance(summarization_length_ratio, float) or not (0 < summarization_length_ratio < 1):
+                raise ValueError("summarization_length_ratio must be a float between 0 and 1")
+        self.summarization_length_ratio = summarization_length_ratio
+        self.summarization_length_min = summarization_length_min
+        self.summarization_length_max = summarization_length_max
+
         if summarization_model is None:
-            summarization_model = GPT3TurboSummarizationModel()
+            summarization_model = GPT4NanoSummarizationModel()
         if not isinstance(summarization_model, BaseSummarizationModel):
             raise ValueError(
                 "summarization_model must be an instance of BaseSummarizationModel"
@@ -112,6 +122,7 @@ class TreeBuilderConfig:
             Top K: {top_k}
             Selection Mode: {selection_mode}
             Summarization Length: {summarization_length}
+            Summarization Length Ratio: {summarization_length_ratio} (min={summarization_length_min}, max={summarization_length_max})
             Summarization Model: {summarization_model}
             Embedding Models: {embedding_models}
             Cluster Embedding Model: {cluster_embedding_model}
@@ -123,6 +134,9 @@ class TreeBuilderConfig:
             top_k=self.top_k,
             selection_mode=self.selection_mode,
             summarization_length=self.summarization_length,
+            summarization_length_ratio=self.summarization_length_ratio,
+            summarization_length_min=self.summarization_length_min,
+            summarization_length_max=self.summarization_length_max,
             summarization_model=self.summarization_model,
             embedding_models=self.embedding_models,
             cluster_embedding_model=self.cluster_embedding_model,
@@ -147,6 +161,9 @@ class TreeBuilder:
         self.threshold = config.threshold
         self.selection_mode = config.selection_mode
         self.summarization_length = config.summarization_length
+        self.summarization_length_ratio = config.summarization_length_ratio
+        self.summarization_length_min = config.summarization_length_min
+        self.summarization_length_max = config.summarization_length_max
         self.summarization_model = config.summarization_model
         self.embedding_models = config.embedding_models
         self.cluster_embedding_model = config.cluster_embedding_model

@@ -68,6 +68,14 @@ class ClusterTreeBuilder(TreeBuilder):
         ):
             node_texts = get_text(cluster)
 
+            if self.summarization_length_ratio is not None:
+                input_tokens = len(self.tokenizer.encode(node_texts))
+                dynamic_length = int(input_tokens * self.summarization_length_ratio)
+                summarization_length = max(
+                    self.summarization_length_min,
+                    min(self.summarization_length_max, dynamic_length),
+                )
+
             summarized_text = self.summarize(
                 context=node_texts,
                 max_tokens=summarization_length,
@@ -109,7 +117,13 @@ class ClusterTreeBuilder(TreeBuilder):
             lock = Lock()
 
             summarization_length = self.summarization_length
-            logging.info(f"Summarization Length: {summarization_length}")
+            if self.summarization_length_ratio is not None:
+                logging.info(
+                    f"Summarization Length: dynamic (ratio={self.summarization_length_ratio:.2f}, "
+                    f"min={self.summarization_length_min}, max={self.summarization_length_max})"
+                )
+            else:
+                logging.info(f"Summarization Length: {summarization_length} (static)")
 
             if use_multithreading:
                 with ThreadPoolExecutor() as executor:
