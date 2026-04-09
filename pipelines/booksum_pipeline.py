@@ -16,6 +16,7 @@ BookSum dataset structure (kmfoda/booksum):
 """
 
 import os
+import re
 import sys
 
 _root = os.path.join(os.path.dirname(__file__), "..")
@@ -27,14 +28,68 @@ from qasper_pipeline import (
     SummaryResult,
     EvalScores,
     build_raptor_config,
+    chain_of_density_summarize,
     evaluate_summary,
     print_evaluation,
     compare,
-    summarize_document as _summarize_text,
 )
 from openai import OpenAI
-from prompts import DOCUMENT_SUMMARY_SYSTEM, DOCUMENT_SUMMARY_USER
+from prompts import DOCUMENT_SUMMARY_SYSTEM, DOCUMENT_SUMMARY_USER, RETRIEVAL_QUERY
 from raptor import RetrievalAugmentation
+
+DEFAULT_CACHE_DIR = os.path.join(_root, ".tree_cache")
+
+
+# ---------------------------------------------------------------------------
+# Cache helpers
+# ---------------------------------------------------------------------------
+
+def _cache_path(title: str, cache_dir: str) -> str:
+    """Return the file path for a cached tree, derived from the chapter title."""
+    safe = re.sub(r"[^\w\-]", "_", title)[:80]
+    return os.path.join(cache_dir, f"{safe}.pkl")
+
+
+def build_tree(
+    row: dict,
+    config: RetrievalAugmentationConfig = None,
+    cache_dir: str = DEFAULT_CACHE_DIR,
+    force_rebuild: bool = False,
+) -> RetrievalAugmentation:
+    """
+    Build (or load from cache) a RAPTOR tree for a BookSum chapter.
+
+    The tree is saved to `cache_dir/<chapter_title>.pkl` after building.
+    On subsequent calls the cached tree is loaded instead of rebuilding,
+    saving both time and API cost.
+
+    Args:
+        row:           A single BookSum dataset row.
+        config:        Optional pre-built RetrievalAugmentationConfig.
+        cache_dir:     Directory to store cached trees. Created if absent.
+        force_rebuild: If True, ignore the cache and rebuild from scratch.
+
+    Returns:
+        A RetrievalAugmentation instance ready for retrieval.
+    """
+    text, _, title = extract_booksum_text(row)
+
+    if config is None:
+        config = build_raptor_config()
+
+    os.makedirs(cache_dir, exist_ok=True)
+    path = _cache_path(title, cache_dir)
+
+    if not force_rebuild and os.path.exists(path):
+        print(f"Loading cached tree: {path}")
+        return RetrievalAugmentation(config=config, tree=path)
+
+    print(f"Building tree for: {title}")
+    ra = RetrievalAugmentation(config=config)
+    ra.add_documents(text)
+    ra.save(path)
+    print(f"Tree saved to: {path}")
+    return ra
 
 
 # ---------------------------------------------------------------------------
@@ -86,43 +141,38 @@ def extract_booksum_text(row: dict) -> tuple[str, str, str]:
 # Summarize a chapter
 # ---------------------------------------------------------------------------
 
-def summarize_chapter(row: dict, config: RetrievalAugmentationConfig = None) -> SummaryResult:
+def summarize_chapter(
+    row: dict,
+    config: RetrievalAugmentationConfig = None,
+    cache_dir: str = DEFAULT_CACHE_DIR,
+    force_rebuild: bool = False,
+) -> SummaryResult:
     """
-    Build a RAPTOR tree from a BookSum chapter and generate a summary.
+    Build (or load) a RAPTOR tree for a BookSum chapter and generate a summary.
 
     Args:
-        row:    A single BookSum dataset row.
-        config: Optional pre-built RetrievalAugmentationConfig.
+        row:           A single BookSum dataset row.
+        config:        Optional pre-built RetrievalAugmentationConfig.
+        cache_dir:     Directory for cached trees.
+        force_rebuild: Ignore cache and rebuild the tree.
 
     Returns:
         SummaryResult with title, abstract (=summary_text), summary, scores={}.
     """
-    text, reference, title = extract_booksum_text(row)
+    _, reference, title = extract_booksum_text(row)
 
-    if config is None:
-        config = build_raptor_config()
-
-    ra = RetrievalAugmentation(config=config)
-    ra.add_documents(text)
+    ra = build_tree(row, config=config, cache_dir=cache_dir, force_rebuild=force_rebuild)
 
     context, _ = ra.retrieve(
-        question="Summarize this chapter",
-        top_k=10,
-        max_tokens=3500,
+        question=RETRIEVAL_QUERY,
+        top_k=20,
+        max_tokens=10000,
         collapse_tree=True,
         return_layer_information=True,
     )
 
     client = OpenAI()
-    response = client.chat.completions.create(
-        model="gpt-4.1-nano",
-        messages=[
-            {"role": "system", "content": DOCUMENT_SUMMARY_SYSTEM},
-            {"role": "user", "content": DOCUMENT_SUMMARY_USER.format(context=context)},
-        ],
-        max_tokens=500,
-    )
-    summary = response.choices[0].message.content.strip()
+    summary = chain_of_density_summarize(context, client)
 
     return SummaryResult(title=title, abstract=reference, summary=summary, scores={})
 
@@ -131,33 +181,26 @@ def summarize_chapter(row: dict, config: RetrievalAugmentationConfig = None) -> 
 # Query a chapter (the "What does this book say about X?" use case)
 # ---------------------------------------------------------------------------
 
-def query_chapter(row: dict, question: str, config: RetrievalAugmentationConfig = None) -> str:
+def query_chapter(
+    row: dict,
+    question: str,
+    config: RetrievalAugmentationConfig = None,
+    cache_dir: str = DEFAULT_CACHE_DIR,
+    force_rebuild: bool = False,
+) -> str:
     """
     Answer a question about a BookSum chapter using RAPTOR tree retrieval.
+    Reuses a cached tree if available — no rebuild needed per question.
 
     Example:
         query_chapter(row, "What does this chapter say about friendship?")
-
-    Args:
-        row:      A single BookSum dataset row.
-        question: The question to answer.
-        config:   Optional pre-built RetrievalAugmentationConfig.
-
-    Returns:
-        The answer string.
     """
-    text, _, _ = extract_booksum_text(row)
-
-    if config is None:
-        config = build_raptor_config()
-
-    ra = RetrievalAugmentation(config=config)
-    ra.add_documents(text)
+    ra = build_tree(row, config=config, cache_dir=cache_dir, force_rebuild=force_rebuild)
 
     context, _ = ra.retrieve(
         question=question,
-        top_k=10,
-        max_tokens=3500,
+        top_k=20,
+        max_tokens=10000,
         collapse_tree=True,
         return_layer_information=True,
     )
@@ -184,7 +227,34 @@ def query_chapter(row: dict, question: str, config: RetrievalAugmentationConfig 
 # Benchmark
 # ---------------------------------------------------------------------------
 
-def compare_chapter(row: dict, config: RetrievalAugmentationConfig = None) -> dict:
+def compare_chapter(
+    row: dict,
+    config: RetrievalAugmentationConfig = None,
+    cache_dir: str = DEFAULT_CACHE_DIR,
+    force_rebuild: bool = False,
+    use_judge: bool = True,
+    judge_model: str = "gpt-4.1",
+) -> dict:
     """Convenience wrapper: run RAPTOR vs baseline comparison on a BookSum row."""
     text, reference, title = extract_booksum_text(row)
-    return compare(text=text, reference=reference, title=title, config=config)
+
+    # Build/load tree once, then retrieve — avoids rebuilding inside compare()
+    ra = build_tree(row, config=config, cache_dir=cache_dir, force_rebuild=force_rebuild)
+
+    context, _ = ra.retrieve(
+        question=RETRIEVAL_QUERY,
+        top_k=20,
+        max_tokens=10000,
+        collapse_tree=True,
+        return_layer_information=True,
+    )
+
+    return compare(
+        text=text,
+        reference=reference,
+        title=title,
+        config=config,
+        raptor_context=context,
+        use_judge=use_judge,
+        judge_model=judge_model,
+    )

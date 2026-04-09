@@ -23,34 +23,32 @@ class BaseSummarizationModel(ABC):
         pass
 
 
-class GPT3TurboSummarizationModel(BaseSummarizationModel):
-    def __init__(self, model="gpt-3.5-turbo"):
+class CustomPromptSummarizationModel(BaseSummarizationModel):
+    """
+    Summarization model with caller-supplied system and user prompts.
+    Use this to swap in domain-specific prompts (e.g. technical documents)
+    without changing the global SUMMARIZATION_SYSTEM / SUMMARIZATION_USER.
 
+    The user_prompt must contain a {context} placeholder.
+    """
+
+    def __init__(self, system_prompt: str, user_prompt: str, model: str = "gpt-4.1-nano"):
+        self.system_prompt = system_prompt
+        self.user_prompt = user_prompt
         self.model = model
 
     @retry(wait=wait_random_exponential(min=1, max=20), stop=stop_after_attempt(6))
     def summarize(self, context, max_tokens=500, stop_sequence=None):
-
-        try:
-            client = OpenAI()
-
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant."},
-                    {
-                        "role": "user",
-                        "content": f"Write a summary of the following, including as many key details as possible: {context}:",
-                    },
-                ],
-                max_tokens=max_tokens,
-            )
-
-            return response.choices[0].message.content
-
-        except Exception as e:
-            print(e)
-            return e
+        client = OpenAI()
+        response = client.chat.completions.create(
+            model=self.model,
+            messages=[
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": self.user_prompt.format(context=context)},
+            ],
+            max_tokens=max_tokens,
+        )
+        return response.choices[0].message.content
 
 
 class GPT4NanoSummarizationModel(BaseSummarizationModel):
@@ -73,31 +71,3 @@ class GPT4NanoSummarizationModel(BaseSummarizationModel):
         return response.choices[0].message.content
 
 
-class GPT3SummarizationModel(BaseSummarizationModel):
-    def __init__(self, model="text-davinci-003"):
-
-        self.model = model
-
-    @retry(wait=wait_random_exponential(min=1, max=20), stop=stop_after_attempt(6))
-    def summarize(self, context, max_tokens=500, stop_sequence=None):
-
-        try:
-            client = OpenAI()
-
-            response = client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant."},
-                    {
-                        "role": "user",
-                        "content": f"Write a summary of the following, including as many key details as possible: {context}:",
-                    },
-                ],
-                max_tokens=max_tokens,
-            )
-
-            return response.choices[0].message.content
-
-        except Exception as e:
-            print(e)
-            return e

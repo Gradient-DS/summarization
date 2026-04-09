@@ -3,7 +3,7 @@ import pickle
 
 from .cluster_tree_builder import ClusterTreeBuilder, ClusterTreeConfig
 from .EmbeddingModels import BaseEmbeddingModel
-from .QAModels import BaseQAModel, GPT3TurboQAModel
+from .QAModels import BaseQAModel, GPT4QAModel
 from .SummarizationModels import BaseSummarizationModel
 from .tree_builder import TreeBuilder, TreeBuilderConfig
 from .tree_retriever import TreeRetriever, TreeRetrieverConfig
@@ -42,9 +42,14 @@ class RetrievalAugmentationConfig:
         tb_top_k=5,
         tb_selection_mode="top_k",
         tb_summarization_length=100,
+        tb_summarization_length_ratio=None,
+        tb_summarization_length_min=100,
+        tb_summarization_length_max=600,
         tb_summarization_model=None,
         tb_embedding_models=None,
         tb_cluster_embedding_model="OpenAI",
+        # ClusterTreeConfig-specific
+        tb_reduction_dimension=10,
     ):
         # Validate tree_builder_type
         if tree_builder_type not in supported_tree_builders:
@@ -99,9 +104,13 @@ class RetrievalAugmentationConfig:
                 top_k=tb_top_k,
                 selection_mode=tb_selection_mode,
                 summarization_length=tb_summarization_length,
+                summarization_length_ratio=tb_summarization_length_ratio,
+                summarization_length_min=tb_summarization_length_min,
+                summarization_length_max=tb_summarization_length_max,
                 summarization_model=tb_summarization_model,
                 embedding_models=tb_embedding_models,
                 cluster_embedding_model=tb_cluster_embedding_model,
+                reduction_dimension=tb_reduction_dimension,
             )
 
         elif not isinstance(tree_builder_config, tree_builder_config_class):
@@ -129,7 +138,7 @@ class RetrievalAugmentationConfig:
         # Assign the created configurations to the instance
         self.tree_builder_config = tree_builder_config
         self.tree_retriever_config = tree_retriever_config
-        self.qa_model = qa_model or GPT3TurboQAModel()
+        self.qa_model = qa_model or GPT4QAModel(model="gpt-4.1-nano")
         self.tree_builder_type = tree_builder_type
 
     def log_config(self):
